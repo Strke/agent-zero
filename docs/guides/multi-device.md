@@ -81,7 +81,9 @@ device fleet section, so the agent is aware of its devices without asking.
 
 - One outbound WebSocket per device; no inbound ports.
 - Per-device tokens are stored hashed on the hub; removing a device revokes it.
-- The hub URL must be HTTPS unless it is localhost.
+- The hub URL must be HTTPS unless it is localhost or the transport is already
+  encrypted and `--allow-plain-http` is passed explicitly (for example over
+  Tailscale).
 - File access is restricted to configured roots; `..` and symlink escapes are
   rejected.
 - Command execution is opt-in per device; commands run as the user that started

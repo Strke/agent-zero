@@ -25,9 +25,9 @@ from .ops import TOOL_DESCRIPTORS, ExecContext, args_summary, dispatch
 from .policy import Policy, PolicyError
 
 PRINT_PREFIX = "[a0-node]"
-FATAL_ERROR_CODES = {"AUTH_FAILED", "PROTOCOL_MISMATCH", "INVALID_DEVICE"}
-FATAL_ERROR_CATEGORIES = {"auth", "protocol"}
 INVOKE_WORKERS = 4
+STABLE_SESSION_SECONDS = 30.0
+BACKOFF_MAX_SECONDS = 30.0
 
 
 def log(message: str) -> None:
@@ -35,11 +35,26 @@ def log(message: str) -> None:
 
 
 class HandshakeRejected(Exception):
-    def __init__(self, code: str, message: str, *, fatal: bool) -> None:
+    def __init__(self, code: str, message: str, *, category: str = "") -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
-        self.fatal = fatal
+        self.category = category
+
+
+def _handshake_hint(exc: HandshakeRejected) -> str:
+    if exc.code == "AUTH_FAILED" or exc.category == "auth":
+        return (
+            "the device may have been removed or disabled on the hub; if this is "
+            "unexpected, create a new pairing code and run join again; the node keeps "
+            "waiting and retrying in the meantime"
+        )
+    if exc.code == "PROTOCOL_MISMATCH" or exc.category == "protocol":
+        return (
+            "hub and node protocol versions do not match; update the node source, "
+            "then restart the node; retrying in the meantime"
+        )
+    return ""
 
 
 def build_hello(config: dict[str, Any], policy: Policy) -> dict[str, Any]:
@@ -119,27 +134,24 @@ class A0NodeClient:
     def run_forever(self) -> int:
         backoff = 1.0
         while not self._stop.is_set():
+            connected_seconds = 0.0
             try:
-                self._serve()
-                backoff = 1.0
+                connected_seconds = self._serve()
             except HandshakeRejected as exc:
-                if exc.fatal:
-                    log(f"connection rejected: {self._message(exc)}")
-                    log("check that the device is still paired and not disabled, then join again")
-                    return 1
-                log(f"handshake failed, retrying: {self._message(exc)}")
+                log(f"hub rejected the handshake: {exc}")
+                hint = _handshake_hint(exc)
+                if hint:
+                    log(hint)
             except Exception as exc:
                 log(f"connection error: {exc}")
+            if connected_seconds >= STABLE_SESSION_SECONDS:
+                backoff = 1.0
             if self._stop.wait(backoff + random.uniform(0.0, 0.5)):
                 break
-            backoff = min(backoff * 2, 30.0)
+            backoff = min(backoff * 2, BACKOFF_MAX_SECONDS)
         return 0
 
-    @staticmethod
-    def _message(exc: HandshakeRejected) -> str:
-        return exc.message
-
-    def _serve(self) -> None:
+    def _serve(self) -> float:
         sio = socketio.Client(logger=False, engineio_logger=False, reconnection=False)
         self._sio = sio
 
@@ -167,6 +179,7 @@ class A0NodeClient:
             self._sio = None
             raise ConnectionError(str(exc)) from exc
 
+        connected_at = 0.0
         try:
             ack = sio.call(
                 EVENT_HELLO,
@@ -181,9 +194,9 @@ class A0NodeClient:
                 code = str(error.get("code") or "HANDSHAKE_FAILED")
                 message = str(error.get("message") or "hub rejected the handshake")
                 category = str(error.get("category") or "")
-                fatal = code in FATAL_ERROR_CODES or category in FATAL_ERROR_CATEGORIES
-                raise HandshakeRejected(code, message, fatal=fatal)
+                raise HandshakeRejected(code, message, category=category)
 
+            connected_at = time.monotonic()
             ready = payload.get("data") or {}
             heartbeat = int(ready.get("heartbeat_seconds") or 30)
             log(
@@ -199,6 +212,7 @@ class A0NodeClient:
             except Exception:
                 pass
             self._sio = None
+        return max(0.0, time.monotonic() - connected_at)
 
     def _start_heartbeat(self, sio: socketio.Client, interval_seconds: int) -> None:
         stop = threading.Event()

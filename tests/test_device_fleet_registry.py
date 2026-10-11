@@ -97,3 +97,19 @@ def test_corrupt_registry_is_treated_as_empty(tmp_path: Path, content: str) -> N
     (tmp_path / "registry.json").write_text(content, encoding="utf-8")
     registry = DeviceRegistry(tmp_path)
     assert registry.count() == 0
+
+
+def test_corrupt_registry_is_quarantined(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text("not json", encoding="utf-8")
+    registry = DeviceRegistry(tmp_path)
+
+    assert registry.list_devices() == []
+
+    quarantined = list(tmp_path.glob("registry.json.corrupt-*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text(encoding="utf-8") == "not json"
+    assert not path.exists()
+
+    device, token = registry.create_device(name="after-quarantine")
+    assert registry.verify_token(device["id"], token)

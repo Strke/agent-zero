@@ -35,8 +35,8 @@ def _free_port() -> int:
 
 
 class _ServerHarness:
-    def __init__(self) -> None:
-        self.port = _free_port()
+    def __init__(self, port: int | None = None) -> None:
+        self.port = port or _free_port()
         self.app = Flask("device-fleet-e2e")
         self.sio = socketio.AsyncServer(async_mode="asgi")
         self.lock = threading.RLock()
@@ -169,3 +169,65 @@ def test_node_client_end_to_end(tmp_path: Path) -> None:
         client_thread.join(timeout=5)
         harness.stop()
         assert not _wait_online(hub, device["id"], timeout=3)
+
+
+def test_node_reconnects_after_hub_restart(tmp_path: Path) -> None:
+    registry = DeviceRegistry(tmp_path / "devices")
+    device, token = registry.create_device(name="restart-node")
+    registry_module.set_default(registry)
+
+    hub = DeviceHub()
+    hub_module.set_default(hub)
+
+    harness = _ServerHarness()
+    harness.install_emitter(hub)
+    port = harness.start()
+    restarted: _ServerHarness | None = None
+
+    client = A0NodeClient(
+        {
+            "version": 1,
+            "hub_url": f"http://127.0.0.1:{port}",
+            "device_id": device["id"],
+            "device_token": token,
+            "name": "restart-node",
+            "policy": {"roots": [str(tmp_path)], "exec_enabled": False},
+        }
+    )
+    client_thread = threading.Thread(target=client.run_forever, daemon=True)
+    client_thread.start()
+
+    try:
+        assert _wait_online(hub, device["id"]), "node never authenticated"
+        first_sid = hub.get_session(device["id"]).sid
+
+        harness.stop()
+        restarted = _ServerHarness(port=port)
+        restarted.install_emitter(hub)
+        restarted.start()
+
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            session = hub.get_session(device["id"])
+            if (
+                session is not None
+                and session.sid != first_sid
+                and hub.is_online(device["id"])
+            ):
+                break
+            time.sleep(0.2)
+        else:
+            raise AssertionError("node did not reconnect after hub restart")
+
+        result = asyncio.run(
+            hub.invoke(device["id"], "system_info", {}, timeout_seconds=10)
+        )
+        assert result["ok"] is True
+        assert result["result"]["node_version"]
+    finally:
+        client.request_stop()
+        client_thread.join(timeout=5)
+        if restarted is not None:
+            restarted.stop()
+        if harness.thread.is_alive():
+            harness.stop()

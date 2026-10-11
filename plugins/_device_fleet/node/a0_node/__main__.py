@@ -30,7 +30,7 @@ from .service import install_service, uninstall_service
 PAIR_CLAIM_PATH = "/api/plugins/_device_fleet/device_pair_claim"
 
 
-def normalize_hub_url(value: str) -> str:
+def normalize_hub_url(value: str, allow_plain_http: bool = False) -> str:
     text = str(value or "").strip().rstrip("/")
     if not text:
         raise SystemExit("--hub is required")
@@ -43,9 +43,11 @@ def normalize_hub_url(value: str) -> str:
     if not host:
         raise SystemExit("hub url must include a host")
     loopback = host in ("localhost", "127.0.0.1", "::1") or host.startswith("127.")
-    if parts.scheme != "https" and not loopback:
+    if parts.scheme != "https" and not loopback and not allow_plain_http:
         raise SystemExit(
-            "refusing plain http for a non-loopback hub; use https (tunnel or certificate)"
+            "refusing plain http for a non-loopback hub; use https (tunnel or "
+            "certificate) or pass --allow-plain-http only on an already encrypted "
+            "network such as Tailscale"
         )
     path = parts.path.rstrip("/")
     return f"{parts.scheme}://{parts.netloc}{path}"
@@ -116,7 +118,8 @@ def _error_message(body: str) -> str:
 
 
 def command_join(args: argparse.Namespace) -> int:
-    hub_url = normalize_hub_url(args.hub)
+    allow_plain_http = bool(getattr(args, "allow_plain_http", False))
+    hub_url = normalize_hub_url(args.hub, allow_plain_http=allow_plain_http)
     code = str(args.code or "").strip()
     if not code:
         raise SystemExit("--code is required")
@@ -140,6 +143,7 @@ def command_join(args: argparse.Namespace) -> int:
     config = {
         "version": CONFIG_VERSION,
         "hub_url": hub_url,
+        "allow_plain_http": allow_plain_http,
         "device_id": result["device_id"],
         "device_token": result["device_token"],
         "name": result.get("device_name") or name,
@@ -195,6 +199,9 @@ def command_status(args: argparse.Namespace) -> int:
     print(f"roots:      {', '.join(str(root) for root in policy.get('roots', [])) or '-'}")
     print(f"exec:       {'enabled' if policy.get('exec_enabled') else 'disabled'}")
     print(f"read only:  {'yes' if policy.get('read_only') else 'no'}")
+    print(
+        f"plain http: {'allowed' if config.get('allow_plain_http') else 'no (https only)'}"
+    )
     print(f"config:     {config_path()}")
     print(f"home:       {node_home()}")
     return 0
@@ -227,6 +234,14 @@ def build_parser() -> argparse.ArgumentParser:
     join = subparsers.add_parser("join", help="pair this device with an Agent Zero hub")
     join.add_argument("--hub", required=True, help="Agent Zero base URL (https for remote hosts)")
     join.add_argument("--code", required=True, help="pairing code from device_manage")
+    join.add_argument(
+        "--allow-plain-http",
+        action="store_true",
+        help=(
+            "allow a plain http hub URL on a non-loopback host; use only on an "
+            "already encrypted network such as Tailscale"
+        ),
+    )
     join.add_argument("--name", default="", help="display name for this device")
     join.add_argument(
         "--workspace",

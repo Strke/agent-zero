@@ -18,6 +18,7 @@ def systemd_unit_text() -> str:
     home = node_home()
     return f"""[Unit]
 Description=Agent Zero device node
+Wants=network-online.target
 After=network-online.target
 
 [Service]
@@ -49,19 +50,23 @@ def launchd_plist_bytes() -> bytes:
     )
 
 
-def windows_schtasks_command() -> list[str]:
+def windows_scheduled_task_command() -> list[str]:
     home = node_home()
-    return [
-        "schtasks",
-        "/Create",
-        "/F",
-        "/SC",
-        "ONLOGON",
-        "/TN",
-        "A0Node",
-        "/TR",
-        f'cmd /c set A0_NODE_HOME={home} && "{sys.executable}" -m a0_node run',
-    ]
+    inner = f'set "A0_NODE_HOME={home}" && "{sys.executable}" -m a0_node run'
+    action_argument = inner.replace("'", "''")
+    script = (
+        "$action = New-ScheduledTaskAction -Execute 'cmd.exe' "
+        f"-Argument '/c {action_argument}'; "
+        "$trigger = New-ScheduledTaskTrigger -AtLogOn; "
+        "$settings = New-ScheduledTaskSettingsSet -RestartCount 999 "
+        "-RestartInterval (New-TimeSpan -Minutes 1) "
+        "-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+        "-ExecutionTimeLimit (New-TimeSpan -Seconds 0); "
+        "Register-ScheduledTask -TaskName 'A0Node' -Action $action "
+        "-Trigger $trigger -Settings $settings "
+        "-Description 'Agent Zero device node' -Force"
+    )
+    return ["powershell", "-NoProfile", "-Command", script]
 
 
 def install_service() -> list[str]:
@@ -81,9 +86,14 @@ def install_service() -> list[str]:
         messages.append("enable it with: systemctl --user daemon-reload && systemctl --user enable --now a0-node")
         messages.append("for background use after logout: loginctl enable-linger $USER")
     elif sys.platform == "win32":
-        command = windows_schtasks_command()
-        messages.append("run this command in an elevated prompt:")
+        command = windows_scheduled_task_command()
+        messages.append(
+            "run this in a PowerShell prompt (no admin needed for the current user):"
+        )
         messages.append("  " + subprocess.list2cmdline(command))
+        messages.append(
+            "the task starts at logon and restarts the node automatically after a crash"
+        )
     else:
         messages.append(f"unsupported platform for automatic service install: {sys.platform}")
         messages.append(f"run the node manually: {_run_command()}")
@@ -105,7 +115,9 @@ def uninstall_service() -> list[str]:
             target.unlink()
             messages.append(f"removed {target}")
     elif sys.platform == "win32":
-        messages.append("remove it with: schtasks /Delete /F /TN A0Node")
+        messages.append(
+            "remove it with: Unregister-ScheduledTask -TaskName A0Node -Confirm:$false"
+        )
     else:
         messages.append("no service was installed for this platform")
     return messages

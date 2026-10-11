@@ -28,8 +28,11 @@ Useful options:
 - `--workspace PATH` change the writable workspace (default: `~/a0-workspace`)
 - `--add-root PATH` add another allowed root (repeatable)
 - `--read-only` reject all writes
+- `--allow-plain-http` allow a plain `http` hub URL on a non-loopback host; use
+  only when the transport is already encrypted, for example over Tailscale
 
-The hub URL must be `https` unless it points to localhost.
+The hub URL must be `https` unless it points to localhost or
+`--allow-plain-http` is set.
 
 ## Run
 
@@ -43,9 +46,16 @@ Install as a background service:
 python -m a0_node install-service
 ```
 
-The service templates use `systemd` (Linux), `launchd` (macOS), or `schtasks`
-(Windows). The displayed commands are printed; nothing runs in the background
-until you execute them.
+The service templates use `systemd` (Linux), `launchd` (macOS), or a
+`Register-ScheduledTask` PowerShell command (Windows, logon trigger with
+automatic restart after a crash). The displayed commands are printed; nothing
+runs in the background until you execute them.
+
+The node never gives up on the hub: if Agent Zero is offline, the process keeps
+waiting with exponential backoff (1s up to 30s) and reconnects automatically
+once the hub is back, even if the hub was restarted. If the device is rejected
+because it was removed or disabled, the node keeps retrying and logs how to
+pair it again.
 
 ## Security model
 

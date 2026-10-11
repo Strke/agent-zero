@@ -37,7 +37,8 @@ pip install -r requirements.txt
 ## 3. Join the hub
 
 Run join with the code from step 1. The hub URL must be `https` unless it points
-to localhost.
+to localhost or the transport is already encrypted and `--allow-plain-http` is
+passed explicitly (for example over Tailscale).
 
 ```bash
 python -m a0_node join --hub <AGENT ZERO URL> --code <CODE> --name <NAME>
@@ -49,6 +50,8 @@ Optional device policies, chosen with the user:
 - `--workspace PATH` change the writable workspace (default: `~/a0-workspace`)
 - `--add-root PATH` add another allowed root (repeatable)
 - `--read-only` reject all writes
+- `--allow-plain-http` allow plain http on a non-loopback host over an already
+  encrypted network such as Tailscale
 
 ## 4. Keep it running
 
@@ -72,7 +75,8 @@ its allowed roots.
   the hub URL matches the address in the browser exactly.
 - `AUTH_FAILED`: the device was removed or disabled; create a new pairing code.
 - `refusing plain http for a non-loopback hub`: use the Tunnel URL or an HTTPS
-  address.
+  address, or add `--allow-plain-http` when the transport is already encrypted
+  (for example over Tailscale).
 - `EXEC_DISABLED`: command execution is off for that device; re-join with
   `--enable-exec` only if the user wants it.
 - `PATH_OUTSIDE_ROOTS`: the path is outside the device's allowed roots; use an

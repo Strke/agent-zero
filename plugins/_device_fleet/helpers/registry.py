@@ -39,16 +39,40 @@ class DeviceRegistry:
 
     def _read_unlocked(self) -> dict[str, Any]:
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return self._empty()
-        except (OSError, ValueError):
+        except OSError:
+            return self._empty()
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            self._quarantine_unlocked()
             return self._empty()
         if not isinstance(data, dict) or data.get("version") != REGISTRY_VERSION:
+            self._quarantine_unlocked()
             return self._empty()
         if not isinstance(data.get("devices"), dict):
             data["devices"] = {}
         return data
+
+    def _quarantine_unlocked(self) -> None:
+        target = self.path.with_name(
+            f"{self.path.name}.corrupt-{int(time.time())}-{secrets.token_hex(2)}"
+        )
+        try:
+            os.replace(self.path, target)
+        except OSError:
+            return
+        try:
+            from helpers.print_style import PrintStyle
+
+            PrintStyle.warning(
+                f"[device-fleet] device registry was unreadable; "
+                f"preserved a copy at {target}"
+            )
+        except Exception:
+            pass
 
     def _write_unlocked(self, data: dict[str, Any]) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
